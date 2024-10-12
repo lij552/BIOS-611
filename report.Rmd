@@ -1,0 +1,16 @@
+---
+title: "Bios 611 Project"
+author: "Li Jiang"
+date: "`r format(Sys.time(), '%m/%d/%Y')`"
+output: 
+  html_document:
+    fig_height: 7
+---
+
+# EDA
+```{r}
+library(tidyverse)
+library(openxlsx)
+
+```
+

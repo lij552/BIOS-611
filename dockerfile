@@ -1,5 +1,4 @@
 FROM rocker/verse
-
-RUN yes | unminimize && apt update && apt install -y man-db manpages && rm -rf /var/lib/apt/lists/*
-
+RUN install2.r --error --skipinstalled tidyverse
+rm -rf /var/lib/apt/lists/*
 EXPOSE 8787
