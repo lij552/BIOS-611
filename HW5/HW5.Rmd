@@ -1,0 +1,172 @@
+---
+title: "Bios 611 HW5"
+author: "Li Jiang"
+date: "`r format(Sys.time(), '%m/%d/%Y')`"
+output:
+  pdf_document:
+    fig_height: 7
+---
+
+```{r setup, include=FALSE}
+require(tidyverse)
+reticulate::use_python("/opt/anaconda3/bin/python")
+```
+
+# Q1: Explain functions
+
+'md5_hash': return a MD5 hash from the given URL
+
+'cache_path': return the cache path from the given URL
+
+'fetch_raw': retrieve the raw HTML content from the given URL without caching and adding a random delay (6 to 12 sec) to avoid excessive requests. Also, logs the time of each request.
+
+'fetch': First, check if there's local cache file for the given URL, if not, it fetches it and saves it to the cache and returns a parsed HTML object.
+
+'episode_lists_urls': get each episode's url from the webpage
+
+'tokenize_and_count': Process the input text by removing punctuation, converting to lowercase, tokenizing, filtering out stopwords and count the frequency of each word
+
+'get_text_of_episodes': extract text content from the episode URL
+
+'get_word_counts_for_episodes': calculate the word frequency for the text of each episode
+
+'get_total_word_count': sum word counts frequency from all episodes
+
+'convert_to_word_count_vectors': convert the word counts into vector
+
+'write_word_counts_to_csv': write the vector for each url into a csv file
+
+# Q2: Visualization
+
+## Part a
+```{r}
+d <- read_csv("episode_word_counts.csv")
+m <- d %>% select(-`Episode URL`) %>% colSums() %>% as_tibble()
+d <- d %>% select(-`Episode URL`) %>% mutate(`Episode URL` = d %>% pull(`Episode URL`))
+
+l <- d %>% pivot_longer(cols=captains:devron) %>%
+    group_by(name) %>%
+    summarise(total=sum(value))
+
+l <- l %>% mutate(name = factor(name, l %>% arrange(desc(total)) %>% pull(name)))
+
+ggplot(l %>% filter(total > 1000), aes(name, total)) + geom_col() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+
+## Part b
+```{r}
+pca <- prcomp(d %>% select(-`Episode URL`) %>% as.matrix())
+pcs <- pca$x %>% as_tibble()
+pcs1 <- pcs[,1:2] %>% as.data.frame()
+pcs %>% ggplot(aes(PC1,PC2))+geom_point()
+```
+
+## Part c
+```{r}
+mf_chr <- d %>%
+    pivot_longer(captains:devron) %>%
+    group_by(`Episode URL`) %>%
+    arrange(desc(value)) %>%
+    slice_head(n = 1) %>%
+    mutate(rank = row_number()) %>%
+    select(mf_name = name, mf_value = value)
+
+mf_chr<- mf_chr [,-1]
+
+
+chr_count <- mf_chr %>% group_by(mf_name) %>% tally() %>% arrange(desc(n))
+
+pca_mf <- cbind(mf_chr, pcs1)
+
+top5_name <- as.character(chr_count[1:5, 1][[1]])
+
+pca_mf <- pca_mf %>%
+    mutate(mf_name = ifelse(mf_name %in% top5_name, mf_name, "Other"))
+
+ggplot(pca_mf, aes(x = PC1, y = PC2, color = mf_name)) +
+    geom_point(size = 3) +
+    labs(title = "PCA Plot Colored by Dominant Character in Each Episode",
+         x = "PC1", y = "PC2")
+
+
+
+```
+
+The top 5 most often names are picard, data, riker, worf, crusher. Picard-dominated episodes appear across PC1, indicating his consistent presence across various themes and episode types. And data-dominated episodes appear in specific area.
+
+# Q3: Clustering
+
+```{r}
+pca_mf$cluster <- factor(kmeans(d %>% select(-`Episode URL`), centers = 5)$cluster)
+pca_mf %>% ggplot(aes(PC1,PC2,color=cluster)) + geom_point()
+```
+It is similar to 2c.
+
+# Q4: Classifier
+
+```{r}
+stds <- d %>%
+    summarise(across(captains:devron, sd)) %>%
+    pivot_longer(captains:devron) %>%
+    rename(std=value) %>%
+    arrange(desc(std)) %>%
+    mutate(name = factor(name, name)) %>%
+    mutate(rank=1:nrow(.))
+
+pcs <- pca$x %>% as_tibble() %>% mutate(across(PC71:PC176, ~ 0)) %>% as.matrix()
+
+truncated_stds <- pca$rotation %*% pcs %>% t() %>% as_tibble() %>%
+    summarise(across(captains:devron, sd)) %>%
+    pivot_longer(captains:devron) %>%
+    rename(std=value) %>%
+    arrange(desc(std)) %>%
+    mutate(name = factor(name, name)) %>%
+    mutate(rank=1:nrow(.))
+
+std_df <- bind_rows(stds %>% mutate(type="full"),
+                    truncated_stds %>% mutate(type="truncated"))
+
+ggplot(std_df, aes(rank, std)) +
+    geom_segment(aes(x=rank, xend=rank, y=0, yend=std, color=factor(type))) + xlim(0, 100) +
+    geom_text(aes(label=name, y=std+2), angle=-90)
+```
+
+```{r}
+d_shrunk <- d %>%
+    select(all_of(std_df %>% filter(type=="truncated" & rank <= 70) %>% pull(name))) %>%
+    mutate(first_half=(row_number() < max(row_number())/2)*1)
+
+library(gbm)
+library(pROC)
+
+train_i <- runif(nrow(d_shrunk)) < 0.75;
+
+train <- d_shrunk %>% filter(train_i);
+test <- d_shrunk %>% filter(!train_i);
+
+model <- gbm(first_half ~ ., data=train)
+summary(model)
+
+predict_part <- predict(model, newdata = test, type = "response")
+predict_part
+
+roc <- roc(test$first_half,predict_part)
+plot(roc)
+```
+
+The AUC is 
+
+```{r}
+roc$auc
+```
+
+# Q5: load into python
+
+```{python}
+import pandas as pd
+df = pd.read_csv("episode_word_counts.csv")
+print(f"the data contains {len(df)} rows")
+df_cleaned = df[df.iloc[:, 1:].select_dtypes(include='number').sum(axis=1) >= 100]
+df_cleaned.to_csv("episode_word_counts_cleaned.csv", index=False)
+
+```
